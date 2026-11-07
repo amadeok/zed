@@ -1683,6 +1683,7 @@ impl Editor {
         &mut self,
         position: Anchor,
         highlight_color: fn(&App) -> Hsla,
+        force_scroll: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1690,8 +1691,9 @@ impl Editor {
             self.unfold_buffer(buffer_id, cx);
         }
         self.unfold_ranges(&[position..position], false, false, cx);
-        let snapshot = self.snapshot(window, cx).display_snapshot;
-        let position = position.to_point(&snapshot.buffer_snapshot());
+        let editor_snapshot = self.snapshot(window, cx);
+        let snapshot = &editor_snapshot.display_snapshot;
+        let position = position.to_point(snapshot.buffer_snapshot());
         let start = snapshot
             .buffer_snapshot()
             .clip_point(Point::new(position.row, 0), Bias::Left);
@@ -1702,7 +1704,23 @@ impl Editor {
         self.highlight_rows::<T>(start..end, highlight_color, Default::default(), cx);
 
         if self.buffer.read(cx).is_singleton() {
-            self.request_autoscroll(Autoscroll::center().for_anchor(start), cx);
+            // Callers that merely want to keep the active line highlighted (for
+            // example when the debugger steps within the same file) pass
+            // `force_scroll: false`. In that case only scroll when the new line
+            // is outside the viewport, so nearby steps don't move the editor
+            // while steps to another part of the file still reveal the line.
+            let display_row = snapshot
+                .point_to_display_point(start.to_point(snapshot.buffer_snapshot()), Bias::Left)
+                .row();
+            let scroll_top = editor_snapshot.scroll_position().y;
+            let visible_line_count = self.visible_line_count().unwrap_or(0.);
+            let is_visible = visible_line_count > 0.
+                && display_row.as_f64() >= scroll_top
+                && display_row.as_f64() < scroll_top + visible_line_count;
+
+            if force_scroll || !is_visible {
+                self.request_autoscroll(Autoscroll::center().for_anchor(start), cx);
+            }
         }
     }
 

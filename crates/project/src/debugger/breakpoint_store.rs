@@ -156,6 +156,7 @@ pub struct BreakpointStore {
     breakpoints: BTreeMap<Arc<Path>, BreakpointsInFile>,
     downstream_client: Option<(AnyProtoClient, u64)>,
     active_stack_frame: Option<ActiveStackFrame>,
+    last_active_stack_frame_path: Option<Arc<Path>>,
     active_debug_line_pane_id: Option<EntityId>,
     // E.g ssh
     mode: BreakpointStoreMode,
@@ -174,6 +175,7 @@ impl BreakpointStore {
             worktree_store,
             downstream_client: None,
             active_stack_frame: Default::default(),
+            last_active_stack_frame_path: None,
             active_debug_line_pane_id: None,
         }
     }
@@ -194,6 +196,7 @@ impl BreakpointStore {
             worktree_store,
             downstream_client: None,
             active_stack_frame: Default::default(),
+            last_active_stack_frame_path: None,
             active_debug_line_pane_id: None,
         }
     }
@@ -705,13 +708,24 @@ impl BreakpointStore {
         cx.notify();
     }
 
-    pub fn set_active_position(&mut self, position: ActiveStackFrame, cx: &mut Context<Self>) {
+    pub fn set_active_position(
+        &mut self,
+        position: ActiveStackFrame,
+        reveal: bool,
+        cx: &mut Context<Self>,
+    ) {
+        // When the debugger stays in the same file, let the editor decide
+        // whether the new line is already visible; only scroll if it isn't.
+        let scroll_to_line =
+            reveal || self.last_active_stack_frame_path.as_deref() != Some(position.path.as_ref());
+        self.last_active_stack_frame_path = Some(position.path.clone());
+
         if self
             .active_stack_frame
             .as_ref()
             .is_some_and(|active_position| active_position == &position)
         {
-            cx.emit(BreakpointStoreEvent::SetDebugLine);
+            cx.emit(BreakpointStoreEvent::SetDebugLine { scroll_to_line });
             return;
         }
 
@@ -721,8 +735,12 @@ impl BreakpointStore {
 
         self.active_stack_frame = Some(position);
 
-        cx.emit(BreakpointStoreEvent::SetDebugLine);
+        cx.emit(BreakpointStoreEvent::SetDebugLine { scroll_to_line });
         cx.notify();
+    }
+
+    pub fn clear_last_active_stack_frame_path(&mut self) {
+        self.last_active_stack_frame_path = None;
     }
 
     pub fn breakpoint_at_row(
@@ -913,7 +931,7 @@ pub enum BreakpointUpdatedReason {
 }
 
 pub enum BreakpointStoreEvent {
-    SetDebugLine,
+    SetDebugLine { scroll_to_line: bool },
     ClearDebugLines,
     BreakpointsUpdated(Arc<Path>, BreakpointUpdatedReason),
     BreakpointsCleared(Vec<Arc<Path>>),

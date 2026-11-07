@@ -1081,7 +1081,11 @@ impl DebugPanel {
             .keys()
             .find(|session| session.read(cx).session_id(cx) == session_id)
         {
-            self.activate_session(session.clone(), window, cx);
+            // This runs whenever a session stops. The stack frame list refresh
+            // will reveal the new top frame, so don't navigate to the frame
+            // selected before the stop (which may belong to the previous stop
+            // and would scroll the editor back to it).
+            self.set_active_session(session.clone(), window, cx);
         }
     }
 
@@ -1091,13 +1095,22 @@ impl DebugPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        debug_assert!(self.sessions_with_children.contains_key(&session_item));
-        session_item.focus_handle(cx).focus(window, cx);
         session_item.update(cx, |this, cx| {
             this.running_state().update(cx, |this, cx| {
                 this.go_to_selected_stack_frame(window, cx);
             });
         });
+        self.set_active_session(session_item, window, cx);
+    }
+
+    fn set_active_session(
+        &mut self,
+        session_item: Entity<DebugSession>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        debug_assert!(self.sessions_with_children.contains_key(&session_item));
+        session_item.focus_handle(cx).focus(window, cx);
         self.active_session = Some(session_item);
         cx.notify();
     }

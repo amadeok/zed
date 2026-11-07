@@ -414,6 +414,7 @@ mod hover {
                         path: Arc::<Path>::from(Path::new(path!("/project/main.rs"))),
                         position,
                     },
+                    false,
                     cx,
                 );
             });
@@ -779,7 +780,7 @@ mod hover {
             project.breakpoint_store().update(cx, |store, cx| {
                 let mut frame = store.active_position().unwrap().clone();
                 frame.path = Path::new(path!("/build/workspace/main.rs")).into();
-                store.set_active_position(frame, cx);
+                store.set_active_position(frame, false, cx);
             });
         });
 
@@ -803,7 +804,7 @@ mod hover {
                 let mut frame = store.active_position().unwrap().clone();
                 frame.path = Path::new(path!("/project/main.rs")).into();
                 frame.position = other_buffer.read(cx).snapshot().anchor_before(0);
-                store.set_active_position(frame, cx);
+                store.set_active_position(frame, false, cx);
             });
         });
         assert!(

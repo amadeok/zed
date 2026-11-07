@@ -859,7 +859,8 @@ impl Session {
                         local.unset_breakpoints_from_paths(paths, cx).detach();
                     }
                 }
-                BreakpointStoreEvent::SetDebugLine | BreakpointStoreEvent::ClearDebugLines => {}
+                BreakpointStoreEvent::SetDebugLine { .. }
+                | BreakpointStoreEvent::ClearDebugLines => {}
             })
             .detach();
 
@@ -2189,11 +2190,15 @@ impl Session {
 
     fn clear_active_debug_line(&mut self, cx: &mut Context<Session>) {
         self.breakpoint_store.update(cx, |store, cx| {
-            store.remove_active_position(Some(self.id), cx)
+            store.remove_active_position(Some(self.id), cx);
+            store.clear_last_active_stack_frame_path();
         });
     }
 
     pub fn pause_thread(&mut self, thread_id: ThreadId, cx: &mut Context<Self>) {
+        self.breakpoint_store
+            .update(cx, |store, _| store.clear_last_active_stack_frame_path());
+
         self.request(
             PauseCommand {
                 thread_id: thread_id.0,
@@ -2337,6 +2342,9 @@ impl Session {
         single_thread: Option<bool>,
         cx: &mut Context<Self>,
     ) {
+        self.breakpoint_store
+            .update(cx, |store, _| store.clear_last_active_stack_frame_path());
+
         self.select_historic_snapshot(None, cx);
 
         self.active_snapshot

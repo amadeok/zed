@@ -8,14 +8,14 @@ use crate::{
 };
 use dap::{
     StackFrame,
-    requests::{Scopes, StackTrace, Threads},
+    requests::{Continue, Scopes, StackTrace, Threads},
 };
 use db::kvp::KeyValueStore;
 use editor::{Editor, ToPoint as _};
 use gpui::{BackgroundExecutor, TestAppContext, VisualTestContext};
-use project::{FakeFs, Project};
+use project::{FakeFs, Project, ProjectPath};
 use serde_json::json;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use unindent::Unindent as _;
 use util::{path, rel_path::rel_path};
 use workspace::Item;
@@ -381,7 +381,7 @@ async fn test_select_stack_frame(executor: BackgroundExecutor, cx: &mut TestAppC
     // select second stack frame
     stack_frame_list
         .update_in(cx, |stack_frame_list, window, cx| {
-            stack_frame_list.go_to_stack_frame(stack_frames[1].id, window, cx)
+            stack_frame_list.go_to_stack_frame(stack_frames[1].id, false, window, cx)
         })
         .await
         .unwrap();
@@ -1270,4 +1270,498 @@ async fn test_stack_frame_filter_persistence(
             "Filter should be restored from KVP store in new session"
         );
     });
+}
+
+#[gpui::test]
+async fn test_stepping_scrolls_only_to_lines_outside_the_viewport(
+    executor: BackgroundExecutor,
+    cx: &mut TestAppContext,
+) {
+    cx.executor().allow_parking();
+    init_test(cx);
+
+    let fs = FakeFs::new(executor.clone());
+    let file_content = (0..200)
+        .map(|row| format!("line {row}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    fs.insert_tree(
+        path!("/project"),
+        json!({
+           "src": {
+               "test.js": file_content.clone(),
+               "module.js": file_content,
+           }
+        }),
+    )
+    .await;
+
+    let project = Project::test(fs, [path!("/project").as_ref()], cx).await;
+    let workspace = init_test_workspace(&project, cx).await;
+    let cx = &mut VisualTestContext::from_window(*workspace, cx);
+    let session = start_debug_session(&workspace, cx, |_| {}).unwrap();
+    let client = session.update(cx, |session, _| session.adapter_client().unwrap());
+
+    client.on_request::<Threads, _>(move |_, _| {
+        Ok(dap::ThreadsResponse {
+            threads: vec![dap::Thread {
+                id: 1,
+                name: "Thread 1".into(),
+            }],
+        })
+    });
+    client.on_request::<Scopes, _>(move |_, _| Ok(dap::ScopesResponse { scopes: vec![] }));
+
+    let stack_frames = Arc::new(Mutex::new(vec![test_stack_frame(
+        1,
+        path!("/project/src/test.js"),
+        150,
+    )]));
+    client.on_request::<StackTrace, _>({
+        let stack_frames = stack_frames.clone();
+        move |_, _| {
+            Ok(dap::StackTraceResponse {
+                stack_frames: stack_frames.lock().unwrap().clone(),
+                total_frames: None,
+            })
+        }
+    });
+
+    client
+        .fake_event(dap::messages::Events::Stopped(test_stopped_event()))
+        .await;
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let editor = workspace
+        .update(cx, |workspace, _, cx| {
+            workspace
+                .items_of_type::<Editor>(cx)
+                .next()
+                .expect("debugged file should be open")
+        })
+        .unwrap();
+
+    let initial_scroll = editor.update_in(cx, |editor, window, cx| {
+        let scroll_position = editor.snapshot(window, cx).scroll_position().y;
+        assert!(
+            scroll_position > 0.,
+            "the first stop should reveal the active line"
+        );
+        scroll_position
+    });
+
+    // Stepping to a line that is already visible should not move the editor.
+    *stack_frames.lock().unwrap() = vec![test_stack_frame(2, path!("/project/src/test.js"), 151)];
+    client
+        .fake_event(dap::messages::Events::Stopped(test_stopped_event()))
+        .await;
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    editor.update_in(cx, |editor, window, cx| {
+        assert_eq!(
+            editor.snapshot(window, cx).scroll_position().y,
+            initial_scroll,
+            "stepping to a visible line within the same file should not scroll the editor"
+        );
+    });
+
+    // Stepping to a line outside the viewport should reveal it.
+    editor.update_in(cx, |editor, window, cx| {
+        editor.set_scroll_position(gpui::Point::new(0., 0.), window, cx);
+    });
+
+    *stack_frames.lock().unwrap() = vec![test_stack_frame(3, path!("/project/src/test.js"), 160)];
+    client
+        .fake_event(dap::messages::Events::Stopped(test_stopped_event()))
+        .await;
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    editor.update_in(cx, |editor, window, cx| {
+        let scroll_position = editor.snapshot(window, cx).scroll_position().y;
+        let visible_line_count = editor.visible_line_count().unwrap_or(0.);
+        let new_line = 159.;
+        assert!(
+            scroll_position <= new_line && new_line < scroll_position + visible_line_count,
+            "stepping to a line outside the viewport should reveal it, \
+             but the editor is scrolled to {scroll_position} and shows {visible_line_count} lines"
+        );
+    });
+
+    *stack_frames.lock().unwrap() = vec![
+        test_stack_frame(4, path!("/project/src/module.js"), 150),
+        test_stack_frame(5, path!("/project/src/module.js"), 180),
+    ];
+    client
+        .fake_event(dap::messages::Events::Stopped(test_stopped_event()))
+        .await;
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let editor = workspace
+        .update(cx, |workspace, _, cx| {
+            workspace
+                .items_of_type::<Editor>(cx)
+                .next()
+                .expect("newly debugged file should be open")
+        })
+        .unwrap();
+
+    let project_path = editor
+        .update(cx, |editor, cx| editor.active_project_path(cx))
+        .expect("debugged editor should have a project path");
+    assert_eq!(rel_path("src/module.js"), project_path.path.as_ref());
+
+    editor.update_in(cx, |editor, window, cx| {
+        assert!(
+            editor.snapshot(window, cx).scroll_position().y > 0.,
+            "debugging a different file should reveal the active line"
+        );
+        editor.set_scroll_position(gpui::Point::new(0., 0.), window, cx);
+    });
+
+    let stack_frame_list =
+        active_debug_session_panel(workspace, cx).update(cx, |debug_panel_item, cx| {
+            debug_panel_item
+                .running_state()
+                .update(cx, |state, _| state.stack_frame_list().clone())
+        });
+
+    stack_frame_list
+        .update_in(cx, |stack_frame_list, window, cx| {
+            stack_frame_list.go_to_stack_frame(5, true, window, cx)
+        })
+        .await
+        .expect("selecting a stack frame should succeed");
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    editor.update_in(cx, |editor, window, cx| {
+        assert!(
+            editor.snapshot(window, cx).scroll_position().y > 0.,
+            "explicitly selecting a stack frame should reveal its line"
+        );
+    });
+}
+
+#[gpui::test]
+async fn test_stepping_reveals_line_after_debug_tab_was_replaced(
+    executor: BackgroundExecutor,
+    cx: &mut TestAppContext,
+) {
+    cx.executor().allow_parking();
+    init_test(cx);
+
+    let fs = FakeFs::new(executor.clone());
+    let file_content = (0..200)
+        .map(|row| format!("line {row}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    fs.insert_tree(
+        path!("/project"),
+        json!({
+           "src": {
+               "test.js": file_content.clone(),
+               "module.js": file_content,
+               "other.js": "other",
+           }
+        }),
+    )
+    .await;
+
+    let project = Project::test(fs, [path!("/project").as_ref()], cx).await;
+    let workspace = init_test_workspace(&project, cx).await;
+    let cx = &mut VisualTestContext::from_window(*workspace, cx);
+    let session = start_debug_session(&workspace, cx, |_| {}).unwrap();
+    let client = session.update(cx, |session, _| session.adapter_client().unwrap());
+
+    client.on_request::<Threads, _>(move |_, _| {
+        Ok(dap::ThreadsResponse {
+            threads: vec![dap::Thread {
+                id: 1,
+                name: "Thread 1".into(),
+            }],
+        })
+    });
+    client.on_request::<Scopes, _>(move |_, _| Ok(dap::ScopesResponse { scopes: vec![] }));
+
+    let stack_frames = Arc::new(Mutex::new(vec![test_stack_frame(
+        1,
+        path!("/project/src/test.js"),
+        150,
+    )]));
+    client.on_request::<StackTrace, _>({
+        let stack_frames = stack_frames.clone();
+        move |_, _| {
+            Ok(dap::StackTraceResponse {
+                stack_frames: stack_frames.lock().unwrap().clone(),
+                total_frames: None,
+            })
+        }
+    });
+
+    client
+        .fake_event(dap::messages::Events::Stopped(test_stopped_event()))
+        .await;
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let editor = workspace
+        .update(cx, |workspace, _, cx| {
+            workspace
+                .items_of_type::<Editor>(cx)
+                .next()
+                .expect("debugged file should be open")
+        })
+        .unwrap();
+
+    editor.update_in(cx, |editor, window, cx| {
+        assert!(
+            editor.snapshot(window, cx).scroll_position().y > 0.,
+            "the first stop should reveal the active line"
+        );
+        editor.set_scroll_position(gpui::Point::new(0., 0.), window, cx);
+    });
+
+    let pane = workspace
+        .update(cx, |workspace, _, cx| {
+            workspace
+                .workspace()
+                .read(cx)
+                .pane_for_item_id(editor.entity_id())
+        })
+        .unwrap()
+        .expect("debugged editor should be in a pane");
+    let workspace_entity = workspace
+        .update(cx, |workspace, _, _| workspace.workspace().clone())
+        .unwrap();
+    let worktree_id = project.update(cx, |project, cx| {
+        project
+            .worktrees(cx)
+            .next()
+            .expect("project should have a worktree")
+            .read(cx)
+            .id()
+    });
+    let other_path = ProjectPath {
+        worktree_id,
+        path: rel_path("src/other.js").into(),
+    };
+    workspace_entity
+        .update_in(cx, |workspace, window, cx| {
+            workspace.open_path_preview(
+                other_path,
+                Some(pane.downgrade()),
+                true,
+                true,
+                true,
+                window,
+                cx,
+            )
+        })
+        .await
+        .unwrap();
+    cx.run_until_parked();
+
+    workspace
+        .update(cx, |workspace, _, cx| {
+            let editors = workspace.items_of_type::<Editor>(cx).collect::<Vec<_>>();
+            assert_eq!(
+                1,
+                editors.len(),
+                "opening another preview should replace the debugged file's tab"
+            );
+            assert_eq!(
+                rel_path("src/other.js"),
+                editors[0]
+                    .read(cx)
+                    .active_project_path(cx)
+                    .expect("replacement editor should have a project path")
+                    .path
+                    .as_ref()
+            );
+        })
+        .unwrap();
+
+    *stack_frames.lock().unwrap() = vec![test_stack_frame(2, path!("/project/src/test.js"), 160)];
+    client
+        .fake_event(dap::messages::Events::Stopped(test_stopped_event()))
+        .await;
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let editor = workspace
+        .update(cx, |workspace, _, cx| {
+            workspace
+                .items_of_type::<Editor>(cx)
+                .find(|editor| {
+                    editor
+                        .read(cx)
+                        .active_project_path(cx)
+                        .is_some_and(|path| path.path.as_ref() == rel_path("src/test.js"))
+                })
+                .expect("debugged file should be reopened")
+        })
+        .unwrap();
+
+    editor.update_in(cx, |editor, window, cx| {
+        let scroll_position = editor.snapshot(window, cx).scroll_position().y;
+        let visible_line_count = editor.visible_line_count().unwrap_or(0.);
+        let new_line = 159.;
+        assert!(
+            scroll_position <= new_line && new_line < scroll_position + visible_line_count,
+            "stepping to a line outside the viewport should reveal it, even when its tab had to be reopened, \
+             but the editor is scrolled to {scroll_position} and shows {visible_line_count} lines"
+        );
+    });
+}
+
+#[gpui::test]
+async fn test_continue_reveals_new_line_within_same_file(
+    executor: BackgroundExecutor,
+    cx: &mut TestAppContext,
+) {
+    cx.executor().allow_parking();
+    init_test(cx);
+
+    let fs = FakeFs::new(executor.clone());
+    let file_content = (0..200)
+        .map(|row| format!("line {row}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    fs.insert_tree(
+        path!("/project"),
+        json!({
+           "src": {
+               "test.js": file_content,
+           }
+        }),
+    )
+    .await;
+
+    let project = Project::test(fs, [path!("/project").as_ref()], cx).await;
+    let workspace = init_test_workspace(&project, cx).await;
+    let cx = &mut VisualTestContext::from_window(*workspace, cx);
+    let session = start_debug_session(&workspace, cx, |client| {
+        client.on_request::<Continue, _>(move |_, _| {
+            Ok(dap::ContinueResponse {
+                all_threads_continued: None,
+            })
+        });
+    })
+    .unwrap();
+    let client = session.update(cx, |session, _| session.adapter_client().unwrap());
+
+    client.on_request::<Threads, _>(move |_, _| {
+        Ok(dap::ThreadsResponse {
+            threads: vec![dap::Thread {
+                id: 1,
+                name: "Thread 1".into(),
+            }],
+        })
+    });
+    client.on_request::<Scopes, _>(move |_, _| Ok(dap::ScopesResponse { scopes: vec![] }));
+
+    let stack_frames = Arc::new(Mutex::new(vec![test_stack_frame(
+        1,
+        path!("/project/src/test.js"),
+        150,
+    )]));
+    client.on_request::<StackTrace, _>({
+        let stack_frames = stack_frames.clone();
+        move |_, _| {
+            Ok(dap::StackTraceResponse {
+                stack_frames: stack_frames.lock().unwrap().clone(),
+                total_frames: None,
+            })
+        }
+    });
+
+    client
+        .fake_event(dap::messages::Events::Stopped(test_stopped_event()))
+        .await;
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let editor = workspace
+        .update(cx, |workspace, _, cx| {
+            workspace
+                .items_of_type::<Editor>(cx)
+                .next()
+                .expect("debugged file should be open")
+        })
+        .unwrap();
+
+    editor.update_in(cx, |editor, window, cx| {
+        assert!(
+            editor.snapshot(window, cx).scroll_position().y > 0.,
+            "the first stop should reveal the active line"
+        );
+        editor.set_scroll_position(gpui::Point::new(0., 0.), window, cx);
+    });
+
+    let running_state = active_debug_session_panel(workspace, cx)
+        .read_with(cx, |item, _| item.running_state().clone());
+    running_state.update(cx, |state, cx| state.continue_program(cx));
+    cx.run_until_parked();
+
+    *stack_frames.lock().unwrap() = vec![test_stack_frame(2, path!("/project/src/test.js"), 50)];
+    client
+        .fake_event(dap::messages::Events::Stopped(test_stopped_event()))
+        .await;
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    editor.update_in(cx, |editor, window, cx| {
+        let scroll_position = editor.snapshot(window, cx).scroll_position().y;
+        let visible_line_count = editor.visible_line_count().unwrap_or(0.);
+        let new_line = 49.;
+        assert!(
+            scroll_position <= new_line && new_line < scroll_position + visible_line_count,
+            "the stop after continuing should reveal the new line, \
+             but the editor is scrolled to {scroll_position} and shows {visible_line_count} lines"
+        );
+    });
+}
+
+fn test_stack_frame(id: u64, path: &str, line: u64) -> StackFrame {
+    StackFrame {
+        id,
+        name: format!("stack frame {id}"),
+        source: Some(dap::Source {
+            name: None,
+            path: Some(path.into()),
+            source_reference: None,
+            presentation_hint: None,
+            origin: None,
+            sources: None,
+            adapter_data: None,
+            checksums: None,
+        }),
+        line,
+        column: 1,
+        end_line: None,
+        end_column: None,
+        can_restart: None,
+        instruction_pointer_reference: None,
+        module_id: None,
+        presentation_hint: None,
+    }
+}
+
+fn test_stopped_event() -> dap::StoppedEvent {
+    dap::StoppedEvent {
+        reason: dap::StoppedEventReason::Pause,
+        description: None,
+        thread_id: Some(1),
+        preserve_focus_hint: None,
+        text: None,
+        all_threads_stopped: None,
+        hit_breakpoint_ids: None,
+    }
 }

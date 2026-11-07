@@ -344,7 +344,7 @@ impl StackFrameList {
             .filter(|_| open_first_stack_frame)
         {
             self.select_ix(Some(ix), cx);
-            self.activate_selected_entry(window, cx);
+            self.activate_selected_entry(false, window, cx);
         } else if let Some(old_selected_frame_id) = old_selected_frame_id {
             let ix = self.entries.iter().position(|entry| match entry {
                 StackFrameEntry::Normal(frame) => frame.id == old_selected_frame_id,
@@ -368,6 +368,7 @@ impl StackFrameList {
     pub fn go_to_stack_frame(
         &mut self,
         stack_frame_id: StackFrameId,
+        reveal: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<Result<()>> {
@@ -384,12 +385,13 @@ impl StackFrameList {
         else {
             return Task::ready(Err(anyhow!("No stack frame for ID")));
         };
-        self.go_to_stack_frame_inner(stack_frame, window, cx)
+        self.go_to_stack_frame_inner(stack_frame, reveal, window, cx)
     }
 
     fn go_to_stack_frame_inner(
         &mut self,
         stack_frame: dap::StackFrame,
+        reveal: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<Result<()>> {
@@ -510,6 +512,7 @@ impl StackFrameList {
                                 path: abs_path,
                                 position,
                             },
+                            reveal,
                             cx,
                         );
                     })
@@ -613,7 +616,7 @@ impl StackFrameList {
             })
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.selected_ix = Some(ix);
-                this.activate_selected_entry(window, cx);
+                this.activate_selected_entry(true, window, cx);
             }))
             .hover(|style| style.bg(cx.theme().colors().element_hover).cursor_pointer())
             .overflow_x_scroll()
@@ -716,7 +719,7 @@ impl StackFrameList {
             })
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.selected_ix = Some(ix);
-                this.activate_selected_entry(window, cx);
+                this.activate_selected_entry(true, window, cx);
             }))
             .hover(|style| style.bg(cx.theme().colors().element_hover).cursor_pointer())
             .child(
@@ -815,7 +818,12 @@ impl StackFrameList {
         self.select_ix(ix, cx);
     }
 
-    fn activate_selected_entry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn activate_selected_entry(
+        &mut self,
+        reveal: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(ix) = self.selected_ix else {
             return;
         };
@@ -825,7 +833,7 @@ impl StackFrameList {
         match entry {
             StackFrameEntry::Normal(stack_frame) => {
                 let stack_frame = stack_frame.clone();
-                self.go_to_stack_frame_inner(stack_frame, window, cx)
+                self.go_to_stack_frame_inner(stack_frame, reveal, window, cx)
                     .detach_and_log_err(cx)
             }
             StackFrameEntry::Label(_) => {
@@ -837,7 +845,7 @@ impl StackFrameList {
     }
 
     fn confirm(&mut self, _: &menu::Confirm, window: &mut Window, cx: &mut Context<Self>) {
-        self.activate_selected_entry(window, cx);
+        self.activate_selected_entry(true, window, cx);
     }
 
     pub(crate) fn toggle_frame_filter(

@@ -1673,7 +1673,7 @@ impl RunningState {
                     let Some(stack_frame_id) = list.opened_stack_frame_id() else {
                         return Task::ready(Ok(()));
                     };
-                    list.go_to_stack_frame(stack_frame_id, window, cx)
+                    list.go_to_stack_frame(stack_frame_id, true, window, cx)
                 })
                 .detach();
         }
@@ -1913,7 +1913,8 @@ impl RunningState {
                     .read(cx)
                     .breakpoint_store()
                     .update(cx, |store, cx| {
-                        store.remove_active_position(Some(self.session_id), cx)
+                        store.remove_active_position(Some(self.session_id), cx);
+                        store.clear_last_active_stack_frame_path();
                     })
             })
             .log_err();
@@ -1947,7 +1948,8 @@ impl RunningState {
                     .read(cx)
                     .breakpoint_store()
                     .update(cx, |store, cx| {
-                        store.remove_active_position(Some(self.session_id), cx)
+                        store.remove_active_position(Some(self.session_id), cx);
+                        store.clear_last_active_stack_frame_path();
                     })
             })
             .log_err();

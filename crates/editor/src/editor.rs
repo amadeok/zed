@@ -2278,8 +2278,8 @@ impl Editor {
                         editor.clear_row_highlights::<ActiveDebugLine>();
                         editor.refresh_inline_values(cx);
                     }
-                    BreakpointStoreEvent::SetDebugLine => {
-                        if editor.go_to_active_debug_line(window, cx) {
+                    BreakpointStoreEvent::SetDebugLine { scroll_to_line } => {
+                        if editor.go_to_active_debug_line(*scroll_to_line, window, cx) {
                             cx.stop_propagation();
                         }
 
@@ -2744,7 +2744,7 @@ impl Editor {
                 editor.start_git_blame_inline(false, window, cx);
             }
 
-            editor.go_to_active_debug_line(window, cx);
+            editor.go_to_active_debug_line(true, window, cx);
 
             editor.minimap =
                 editor.create_minimap(EditorSettings::get_global(cx).minimap, window, cx);
@@ -6757,7 +6757,12 @@ impl Editor {
         self.breakpoint_store.clone()
     }
 
-    fn go_to_active_debug_line(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    fn go_to_active_debug_line(
+        &mut self,
+        scroll_to_line: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         maybe!({
             let breakpoint_store = self.breakpoint_store.as_ref()?;
 
@@ -6801,6 +6806,7 @@ impl Editor {
             self.go_to_line::<ActiveDebugLine>(
                 multibuffer_anchor,
                 |cx| cx.theme().colors().editor_debugger_active_line_background,
+                scroll_to_line,
                 window,
                 cx,
             );

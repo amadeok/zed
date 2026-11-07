@@ -1869,7 +1869,8 @@ impl Workspace {
                 | BreakpointStoreEvent::BreakpointsCleared(_) => {
                     workspace.serialize_workspace(window, cx);
                 }
-                BreakpointStoreEvent::SetDebugLine | BreakpointStoreEvent::ClearDebugLines => {}
+                BreakpointStoreEvent::SetDebugLine { .. }
+                | BreakpointStoreEvent::ClearDebugLines => {}
             },
         )
         .detach();
