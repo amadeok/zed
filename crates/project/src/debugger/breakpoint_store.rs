@@ -5,7 +5,7 @@ use anyhow::{Context as _, Result};
 pub use breakpoints_in_file::{BreakpointSessionState, BreakpointWithPosition};
 use breakpoints_in_file::{BreakpointsInFile, StatefulBreakpoint};
 use collections::{BTreeMap, HashMap};
-use dap::{StackFrameId, client::SessionId};
+use dap::{StackFrameId, client::SessionId, debugger_settings::DebuggerSettings};
 use gpui::{
     App, AppContext, AsyncApp, Context, Entity, EntityId, EventEmitter, Subscription, Task,
 };
@@ -15,6 +15,7 @@ use rpc::{
     AnyProtoClient, TypedEnvelope,
     proto::{self},
 };
+use settings::Settings;
 use std::{hash::Hash, ops::Range, path::Path, sync::Arc};
 use text::{Bias, Point, PointUtf16, Unclipped};
 use util::maybe;
@@ -714,10 +715,13 @@ impl BreakpointStore {
         reveal: bool,
         cx: &mut Context<Self>,
     ) {
-        // When the debugger stays in the same file, let the editor decide
-        // whether the new line is already visible; only scroll if it isn't.
-        let scroll_to_line =
-            reveal || self.last_active_stack_frame_path.as_deref() != Some(position.path.as_ref());
+        // When `preserve_viewport_on_step` is enabled and the debugger stays
+        // in the same file, let the editor decide whether the new line is
+        // already visible; only scroll if it isn't. When the setting is
+        // disabled, always scroll to the active line.
+        let scroll_to_line = !DebuggerSettings::get_global(cx).preserve_viewport_on_step
+            || reveal
+            || self.last_active_stack_frame_path.as_deref() != Some(position.path.as_ref());
         self.last_active_stack_frame_path = Some(position.path.clone());
 
         if self

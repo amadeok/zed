@@ -7249,6 +7249,7 @@ Each adapter accepts optional `binary`, `args`, and `env` fields to customize ho
   "debugger": {
     "stepping_granularity": "line",
     "save_breakpoints": true,
+    "preserve_viewport_on_step": false,
     "timeout": 2000,
     "log_dap_communications": true,
     "format_dap_log_messages": true,

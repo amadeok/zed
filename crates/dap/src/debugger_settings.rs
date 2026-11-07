@@ -11,6 +11,13 @@ pub struct DebuggerSettings {
     ///
     /// Default: true
     pub save_breakpoints: bool,
+    /// Whether stepping in the debugger avoids scrolling the editor when the
+    /// new active line is already visible in the viewport. Stepping to a line
+    /// outside the viewport or into a different file still scrolls to reveal
+    /// it.
+    ///
+    /// Default: false
+    pub preserve_viewport_on_step: bool,
     /// Whether to show the debug button in the status bar.
     ///
     /// Default: true
@@ -49,6 +56,7 @@ impl Settings for DebuggerSettings {
                 content.stepping_granularity.unwrap(),
             ),
             save_breakpoints: content.save_breakpoints.unwrap(),
+            preserve_viewport_on_step: content.preserve_viewport_on_step.unwrap(),
             button: content.button.unwrap(),
             timeout: content.timeout.unwrap(),
             log_dap_communications: content.log_dap_communications.unwrap(),

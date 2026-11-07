@@ -3029,6 +3029,7 @@
   "debugger": {
     "stepping_granularity": "line",
     "save_breakpoints": true,
+    "preserve_viewport_on_step": false,
     "timeout": 2000,
     "dock": "bottom",
     "default_width": 300,

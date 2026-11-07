@@ -1081,11 +1081,15 @@ impl DebugPanel {
             .keys()
             .find(|session| session.read(cx).session_id(cx) == session_id)
         {
-            // This runs whenever a session stops. The stack frame list refresh
-            // will reveal the new top frame, so don't navigate to the frame
-            // selected before the stop (which may belong to the previous stop
-            // and would scroll the editor back to it).
-            self.set_active_session(session.clone(), window, cx);
+            if DebuggerSettings::get_global(cx).preserve_viewport_on_step {
+                // This runs whenever a session stops. The stack frame list refresh
+                // will reveal the new top frame, so don't navigate to the frame
+                // selected before the stop (which may belong to the previous stop
+                // and would scroll the editor back to it).
+                self.set_active_session(session.clone(), window, cx);
+            } else {
+                self.activate_session(session.clone(), window, cx);
+            }
         }
     }
 

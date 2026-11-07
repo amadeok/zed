@@ -645,6 +645,13 @@ pub struct DebuggerSettingsContent {
     ///
     /// Default: true
     pub save_breakpoints: Option<bool>,
+    /// Whether stepping in the debugger avoids scrolling the editor when the
+    /// new active line is already visible in the viewport. Stepping to a line
+    /// outside the viewport or into a different file still scrolls to reveal
+    /// it.
+    ///
+    /// Default: false
+    pub preserve_viewport_on_step: Option<bool>,
     /// Whether to show the debug button in the status bar.
     ///
     /// Default: true

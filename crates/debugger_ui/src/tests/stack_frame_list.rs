@@ -12,7 +12,7 @@ use dap::{
 };
 use db::kvp::KeyValueStore;
 use editor::{Editor, ToPoint as _};
-use gpui::{BackgroundExecutor, TestAppContext, VisualTestContext};
+use gpui::{BackgroundExecutor, TestAppContext, UpdateGlobal as _, VisualTestContext};
 use project::{FakeFs, Project, ProjectPath};
 use serde_json::json;
 use std::sync::{Arc, Mutex};
@@ -1279,6 +1279,7 @@ async fn test_stepping_scrolls_only_to_lines_outside_the_viewport(
 ) {
     cx.executor().allow_parking();
     init_test(cx);
+    enable_preserve_viewport_on_step(cx);
 
     let fs = FakeFs::new(executor.clone());
     let file_content = (0..200)
@@ -1448,12 +1449,114 @@ async fn test_stepping_scrolls_only_to_lines_outside_the_viewport(
 }
 
 #[gpui::test]
+async fn test_stepping_scrolls_to_visible_line_when_viewport_preservation_is_disabled(
+    executor: BackgroundExecutor,
+    cx: &mut TestAppContext,
+) {
+    cx.executor().allow_parking();
+    init_test(cx);
+
+    let fs = FakeFs::new(executor.clone());
+    let file_content = (0..200)
+        .map(|row| format!("line {row}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    fs.insert_tree(
+        path!("/project"),
+        json!({
+           "src": {
+               "test.js": file_content,
+           }
+        }),
+    )
+    .await;
+
+    let project = Project::test(fs, [path!("/project").as_ref()], cx).await;
+    let workspace = init_test_workspace(&project, cx).await;
+    let cx = &mut VisualTestContext::from_window(*workspace, cx);
+    let session = start_debug_session(&workspace, cx, |_| {}).unwrap();
+    let client = session.update(cx, |session, _| session.adapter_client().unwrap());
+
+    client.on_request::<Threads, _>(move |_, _| {
+        Ok(dap::ThreadsResponse {
+            threads: vec![dap::Thread {
+                id: 1,
+                name: "Thread 1".into(),
+            }],
+        })
+    });
+    client.on_request::<Scopes, _>(move |_, _| Ok(dap::ScopesResponse { scopes: vec![] }));
+
+    let stack_frames = Arc::new(Mutex::new(vec![test_stack_frame(
+        1,
+        path!("/project/src/test.js"),
+        150,
+    )]));
+    client.on_request::<StackTrace, _>({
+        let stack_frames = stack_frames.clone();
+        move |_, _| {
+            Ok(dap::StackTraceResponse {
+                stack_frames: stack_frames.lock().unwrap().clone(),
+                total_frames: None,
+            })
+        }
+    });
+
+    client
+        .fake_event(dap::messages::Events::Stopped(test_stopped_event()))
+        .await;
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let editor = workspace
+        .update(cx, |workspace, _, cx| {
+            workspace
+                .items_of_type::<Editor>(cx)
+                .next()
+                .expect("debugged file should be open")
+        })
+        .unwrap();
+
+    let offset_scroll = editor.update_in(cx, |editor, window, cx| {
+        let scroll_position = editor.snapshot(window, cx).scroll_position().y;
+        assert!(
+            scroll_position > 5.,
+            "the first stop should reveal the active line"
+        );
+        // Shift the scroll position a few lines up, keeping both the current
+        // and the next active line visible.
+        let offset_scroll = scroll_position - 5.;
+        editor.set_scroll_position(gpui::Point::new(0., offset_scroll), window, cx);
+        offset_scroll
+    });
+
+    // With `preserve_viewport_on_step` disabled (the default), stepping to a
+    // line that is already visible should still scroll the editor to it.
+    *stack_frames.lock().unwrap() = vec![test_stack_frame(2, path!("/project/src/test.js"), 151)];
+    client
+        .fake_event(dap::messages::Events::Stopped(test_stopped_event()))
+        .await;
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    editor.update_in(cx, |editor, window, cx| {
+        assert_ne!(
+            editor.snapshot(window, cx).scroll_position().y,
+            offset_scroll,
+            "stepping to a visible line should scroll the editor when `preserve_viewport_on_step` is disabled"
+        );
+    });
+}
+
+#[gpui::test]
 async fn test_stepping_reveals_line_after_debug_tab_was_replaced(
     executor: BackgroundExecutor,
     cx: &mut TestAppContext,
 ) {
     cx.executor().allow_parking();
     init_test(cx);
+    enable_preserve_viewport_on_step(cx);
 
     let fs = FakeFs::new(executor.clone());
     let file_content = (0..200)
@@ -1627,6 +1730,7 @@ async fn test_continue_reveals_new_line_within_same_file(
 ) {
     cx.executor().allow_parking();
     init_test(cx);
+    enable_preserve_viewport_on_step(cx);
 
     let fs = FakeFs::new(executor.clone());
     let file_content = (0..200)
@@ -1726,6 +1830,19 @@ async fn test_continue_reveals_new_line_within_same_file(
             "the stop after continuing should reveal the new line, \
              but the editor is scrolled to {scroll_position} and shows {visible_line_count} lines"
         );
+    });
+}
+
+fn enable_preserve_viewport_on_step(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        settings::SettingsStore::update_global(cx, |store, cx| {
+            store.update_user_settings(cx, |settings| {
+                settings
+                    .debugger
+                    .get_or_insert_default()
+                    .preserve_viewport_on_step = Some(true);
+            });
+        });
     });
 }
 

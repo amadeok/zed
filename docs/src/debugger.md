@@ -183,6 +183,7 @@ The settings for the debugger are grouped under the `debugger` key in `settings.
 - `default_height`: Default height in pixels when docked to the bottom (default: `300`).
 - `stepping_granularity`: Determines the stepping granularity.
 - `save_breakpoints`: Whether the breakpoints should be reused across Zed sessions.
+- `preserve_viewport_on_step`: Whether stepping avoids scrolling the editor when the new active line is already visible.
 - `button`: Whether to show the debug button in the status bar.
 - `timeout`: Time in milliseconds until timeout error when connecting to a TCP debug adapter.
 - `log_dap_communications`: Whether to log messages between active debug adapters and Zed.
@@ -260,6 +261,24 @@ The settings for the debugger are grouped under the `debugger` key in `settings.
 {
   "debugger": {
     "save_breakpoints": true
+  }
+}
+```
+
+### Preserve Viewport on Step
+
+- Description: Whether stepping through code keeps the editor viewport in place when the new active line is already visible. Stepping to a line outside the viewport or into a different file still scrolls to reveal it, and so does selecting a stack frame in the debug panel. When disabled, the editor scrolls to center the active line on every step.
+- Default: `false`
+- Setting: `debugger.preserve_viewport_on_step`
+
+**Options**
+
+`boolean` values
+
+```json [settings]
+{
+  "debugger": {
+    "preserve_viewport_on_step": true
   }
 }
 ```
