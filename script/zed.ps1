@@ -1,4 +1,3 @@
-#Requires -Version 5.1
 <#
 .SYNOPSIS
     Single entry point for building and running the Zed repo on Windows.
@@ -55,6 +54,15 @@
 .PARAMETER Quiet
     Do not print the selected toolset.
 
+.PARAMETER Stable
+    Set ZED_RELEASE_CHANNEL=stable for cargo and for the process launched by
+    run mode. Release builds embed the channel at compile time, so combine
+    this with -Release to build a stable-channel binary; debug builds read
+    the variable at runtime.
+
+.PARAMETER Help
+    Show this help and exit.
+
 .EXAMPLE
     zed
 
@@ -64,6 +72,13 @@
     zed -Release
 
     Runs `cargo build --release`.
+
+.EXAMPLE
+    zed -Stable -Release
+
+    Runs `cargo build --release` with ZED_RELEASE_CHANNEL=stable: the binary
+    uses the stable channel and shares its single-instance mutex and named
+    pipe with an installed stable Zed.
 
 .EXAMPLE
     zed check -p zed
@@ -103,11 +118,15 @@
     elevated shell.
 #>
 
+#Requires -Version 5.1
+
 $mode         = 'cargo' # 'cargo' or 'run'
 $release      = $false
 $forceBuild   = $false
 $linkSpectre  = $false
 $quiet        = $false
+$stable       = $false
+$showHelp     = $false
 $forcedVsPath = $null
 $parseOptions = $true
 $cargoArgs    = @()
@@ -128,10 +147,15 @@ for ($i = 0; $i -lt $args.Count; $i++) {
         switch ($arg) {
             '-Release'     { $release      = $true }
             '--release'    { $release      = $true }
+            '-Stable'      { $stable       = $true }
+            '--stable'     { $stable       = $true }
             '-Build'       { $forceBuild   = $true }
             '--build'      { $forceBuild   = $true }
             '-LinkSpectre' { $linkSpectre  = $true }
             '-Quiet'       { $quiet        = $true }
+            '-h'           { $showHelp     = $true }
+            '--help'       { $showHelp     = $true }
+            '-Help'        { $showHelp     = $true }
             '-VsPath'      { $forcedVsPath = [string]$args[++$i] }
             default        { $consumed     = $false }
         }
@@ -147,6 +171,41 @@ for ($i = 0; $i -lt $args.Count; $i++) {
     }
 
     if ($mode -eq 'cargo') { $cargoArgs += $arg } else { $zedArgs += $arg }
+}
+
+function Show-Usage {
+    @'
+Single entry point for building and running the Zed repo on Windows.
+
+Usage:
+  zed [cargo args...]              Run cargo (default: cargo build)
+  zed run [options] [zed args...]  Run target\<profile>\zed.exe
+
+Options (only consumed before --):
+  -Release, --release   Use the release profile
+  -Stable, --stable     Set ZED_RELEASE_CHANNEL=stable
+  -Build, --build       (run mode) Build before running
+  -LinkSpectre          Create Spectre junctions instead of building
+  -VsPath <path>        Only use this Visual Studio installation
+  -Quiet                Do not print the selected toolset
+  -h, --help, -Help     Show this help
+  --                    Forward the rest verbatim
+
+Examples:
+  zed                     cargo build (debug)
+  zed -Release            cargo build --release
+  zed -Stable -Release    stable-channel release build
+  zed run -Release        run target\release\zed.exe
+'@ | Write-Host
+}
+
+if ($showHelp) {
+    Show-Usage
+    exit 0
+}
+
+if ($stable) {
+    $env:ZED_RELEASE_CHANNEL = 'stable'
 }
 
 if ($linkSpectre -and $mode -eq 'run') {
