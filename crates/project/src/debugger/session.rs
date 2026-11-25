@@ -2090,10 +2090,6 @@ impl Session {
         self.send_data_breakpoints(cx);
     }
 
-    pub fn breakpoints_enabled(&self) -> bool {
-        self.ignore_breakpoints
-    }
-
     pub fn loaded_sources(&mut self, cx: &mut Context<Self>) -> &[Source] {
         self.fetch(
             dap_command::LoadedSourcesCommand,
@@ -2799,8 +2795,7 @@ impl Session {
     pub fn refresh_watchers(&mut self, frame_id: u64, cx: &mut Context<Self>) {
         let watches = self.watchers.clone();
         for (_, watch) in watches.into_iter() {
-            self.add_watcher(watch.expression.clone(), frame_id, cx)
-                .detach();
+            self.add_watcher(watch.expression, frame_id, cx).detach();
         }
     }
 
